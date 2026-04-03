@@ -207,6 +207,8 @@ footer{border-top:1px solid var(--border2);padding:1.25rem 1.5rem;background:var
     </select>
     <div class="vbtns">
       <button class="vb active" id="v-tbl" onclick="document.getElementById('content').scrollIntoView({behavior:'smooth'})">☰ Bảng</button>
+      <button class="vb" id="btn-clear-storage" onclick="clearStorage()" title="Xóa tất cả dữ liệu đã lưu trong trình duyệt" style="opacity:.5;font-size:10px">✕ Clear</button>
+      <button class="vb" id="btn-export" onclick="exportHTML()" title="Download file HTML đã cập nhật để upload lên GitHub">💾 Export</button>
       <button class="vb" id="btn-import" onclick="document.getElementById('xl-input').click()" title="Import file vnmarket.xlsx để cập nhật KH 2026 và Q1/2026">📂 Import</button>
       <input type="file" id="xl-input" accept=".xlsx,.xls" style="display:none" onchange="handleXLImport(event)">
     </div>
@@ -295,6 +297,50 @@ function toCAGR2(cagr) {
 }
 
 const overrides = {}; // {ma: {kh2026?, cagr2?}}
+
+// === PERSISTENT STORAGE ===
+const LS_OV  = 'vnwl_overrides_2026';
+const LS_RAW = 'vnwl_rawpatches_2026';
+
+function saveOverrides() {
+  try { localStorage.setItem(LS_OV, JSON.stringify(overrides)); } catch(e){}
+}
+function loadOverrides() {
+  try {
+    var s = localStorage.getItem(LS_OV);
+    if (s) { var o = JSON.parse(s); Object.keys(o).forEach(function(k){ overrides[k]=o[k]; }); }
+  } catch(e){}
+}
+function saveRawPatches(patches) {
+  // patches = [{ma, kh2026, q1_2026, q4_yoy, ln2025}, ...]
+  try {
+    var existing = [];
+    try { existing = JSON.parse(localStorage.getItem(LS_RAW)||'[]'); } catch(e){}
+    // Merge: upsert by ma
+    var map = {};
+    existing.forEach(function(p){ map[p.ma]=p; });
+    patches.forEach(function(p){ map[p.ma]=p; });
+    localStorage.setItem(LS_RAW, JSON.stringify(Object.values(map)));
+  } catch(e){}
+}
+function loadRawPatches() {
+  try {
+    var s = localStorage.getItem(LS_RAW);
+    if (!s) return;
+    var patches = JSON.parse(s);
+    var rawMap = {};
+    RAW_BASE.forEach(function(r){ rawMap[r.ma]=r; });
+    patches.forEach(function(p) {
+      var row = rawMap[p.ma];
+      if (!row) return;
+      if (p.kh2026)  row.kh2026  = p.kh2026;
+      if (p.q1_2026) row.q1_2026 = p.q1_2026;
+      if (p.q4_yoy != null) row.q4_yoy = p.q4_yoy;
+      if (p.ln2025)  row.ln2025  = p.ln2025;
+      if (p.type)    row.type    = p.type;
+    });
+  } catch(e){}
+}
 
 function compute(r) {
   const ov = overrides[r.ma] || {};
@@ -424,10 +470,11 @@ function editField(el, ma, field) {
         if (!Object.keys(overrides[ma]).length) delete overrides[ma];
       }
     }
+    saveOverrides();
     render();
   }
   inp.addEventListener('blur', commit);
-  inp.addEventListener('keydown', e => { if(e.key==='Enter') inp.blur(); if(e.key==='Escape'){if(overrides[ma])delete overrides[ma];render();} });
+  inp.addEventListener('keydown', e => { if(e.key==='Enter') inp.blur(); if(e.key==='Escape'){if(overrides[ma])delete overrides[ma];saveOverrides();render();} });
 }
 
 // Sector summary
@@ -734,6 +781,13 @@ function applyImport() {
     if (item.ln25 && item.ln25 > 0) row.ln2025 = item.ln25;
   });
 
+  // Save patches to localStorage for persistence
+  var toSave = [];
+  (pendingImport||[]).forEach(function(item) {
+    toSave.push({ma:item.ma, kh2026:item.kh||null, q1_2026:item.q1||null,
+                 q4_yoy:item.q1yoy, ln2025:item.ln25||null, type:'est'});
+  });
+  if (toSave.length) saveRawPatches(toSave);
   pendingImport = null;
   render();
   closeImport();
@@ -745,6 +799,48 @@ function applyImport() {
   n.textContent = 'Import thanh cong!';
   document.body.appendChild(n);
   setTimeout(function(){ n.remove(); }, 2500);
+}
+
+function exportHTML() {
+  // Serialize RAW_BASE hiện tại (đã có patches) vào HTML
+  var newJson = JSON.stringify(RAW_BASE);
+  var src = document.documentElement.outerHTML;
+
+  // Tìm và thay RAW_BASE cũ bằng mới
+  var startMarker = 'const RAW_BASE = [';
+  var si = src.indexOf(startMarker);
+  if (si === -1) { alert('Không tìm thấy RAW_BASE trong HTML'); return; }
+
+  // Tìm dấu ]; kết thúc JSON bằng bracket matching
+  var depth = 0, ei = -1;
+  for (var i = si + startMarker.length - 1; i < src.length; i++) {
+    if (src[i] === '[') depth++;
+    else if (src[i] === ']') { depth--; if (depth === 0) { ei = i + 1; break; } }
+  }
+  if (ei === -1) { alert('Không tìm được điểm kết thúc RAW_BASE'); return; }
+
+  var newSrc = src.slice(0, si) + 'const RAW_BASE = ' + newJson + src.slice(ei);
+
+  // Cập nhật ngày
+  var today = new Date();
+  var dd = String(today.getDate()).padStart(2,'0');
+  var mm = String(today.getMonth()+1).padStart(2,'0');
+  var yyyy = today.getFullYear();
+  newSrc = newSrc.replace(/Cập nhật: \d{2}\/\d{2}\/\d{4}/, 'Cập nhật: ' + dd + '/' + mm + '/' + yyyy);
+
+  // Download
+  var blob = new Blob([newSrc], {type: 'text/html;charset=utf-8'});
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'index.html';
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function clearStorage() {
+  if (!confirm('Xóa tất cả dữ liệu import/edit đã lưu? Trang sẽ tải lại.')) return;
+  try { localStorage.removeItem(LS_OV); localStorage.removeItem(LS_RAW); } catch(e){}
+  location.reload();
 }
 
 function closeImport() {
