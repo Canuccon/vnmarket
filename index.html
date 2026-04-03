@@ -612,130 +612,139 @@ document.getElementById('filters').addEventListener('click',e=>{
 });
 render();
 
-// ─── IMPORT EXCEL ───────────────────────────────────────────────────────────
-let pendingImport = null;
+// === IMPORT EXCEL ===
+var pendingImport = null;
 
 function handleXLImport(event) {
-  const file = event.target.files[0];
+  var file = event.target.files[0];
   if (!file) return;
-  event.target.value = ''; // reset để chọn lại được
-  const log = document.getElementById('import-log');
-  log.innerHTML = `Đang đọc <strong>${file.name}</strong>...`;
+  event.target.value = '';
+  var log = document.getElementById('import-log');
+  log.innerHTML = 'Dang doc: <strong>' + file.name + '</strong>...';
   document.getElementById('btn-apply').style.display = 'none';
   document.getElementById('import-modal').classList.add('open');
 
-  const reader = new FileReader();
+  var reader = new FileReader();
   reader.onload = function(e) {
     try {
       if (typeof XLSX === 'undefined') {
-        log.innerHTML = '<span class="err">Lỗi: Thư viện XLSX chưa tải. Vui lòng kiểm tra kết nối mạng.</span>';
+        log.innerHTML = '<span class="err">Loi: Thu vien XLSX chua tai. Kiem tra ket noi mang.</span>';
         return;
       }
-      const wb = XLSX.read(e.target.result, {type:'array', cellDates:true});
-      const ws = wb.Sheets['KQKD'] || wb.Sheets[wb.SheetNames[0]];
-      const rows = XLSX.utils.sheet_to_json(ws, {header:1, raw:true, defval:null});
+      var wb = XLSX.read(e.target.result, {type:'array'});
+      var ws = wb.Sheets['KQKD'] || wb.Sheets[wb.SheetNames[0]];
+      var rows = XLSX.utils.sheet_to_json(ws, {header:1, raw:true, defval:null});
       parseAndPreview(rows, file.name);
     } catch(err) {
-      log.innerHTML = `<span class="err">Lỗi đọc file: ${err.message}</span>`;
+      log.innerHTML = '<span class="err">Loi doc file: ' + err.message + '</span>';
     }
   };
   reader.readAsArrayBuffer(file);
 }
 
 function parseAndPreview(rows, fname) {
-  const log = document.getElementById('import-log');
-  // Row 2 (index 2) = header: col2=Q1/2026, col3=QoQ%, col4=YoY%, col5=lũy kế, col6=%Plan, col7=KH2026, col8=LN2025
-  const SKIP = new Set(['Total','Bank','RE','Sản xuất','Tiện ích','Tech','Vận tải kho bãi',
-                        'Retail','Securities','Insurance','Dược','Khai khoáng','']);
-  const changes = [];
-  const rawMap = {};
-  RAW_DATA.forEach(r => rawMap[r.ma] = r);
+  var log = document.getElementById('import-log');
+  var SKIP = {'Total':1,'Bank':1,'RE':1,'San xuat':1,'Tien ich':1,'Tech':1,
+              'Van tai kho bai':1,'Retail':1,'Securities':1,'Insurance':1,
+              'Duoc':1,'Khai khoang':1,'':1};
+  // Also skip Vietnamese group headers
+  var SKIP_EXACT = new Set(['Total','Bank','RE',
+    'S\u1EA3n xu\u1EA5t','Ti\u1EC7n \u00EDch','Tech','V\u1EADn t\u1EA3i kho b\u00E3i',
+    'Retail','Securities','Insurance','D\u01B0\u1EE3c','Khai kho\u00E1ng']);
 
-  let lines = [`<span class="ok">📄 File: ${fname}</span>
-`];
-  let updated = 0, skipped = 0;
+  var rawMap = {};
+  RAW_BASE.forEach(function(r){ rawMap[r.ma] = r; });
 
-  for (let i = 3; i < rows.length; i++) {
-    const row = rows[i];
+  var changes = [];
+  var lines = ['<span class="ok">File: ' + fname + '</span>'];
+  var updated = 0;
+
+  for (var i = 3; i < rows.length; i++) {
+    var row = rows[i];
     if (!row || !row[1]) continue;
-    const ma = String(row[1]).trim();
-    if (SKIP.has(ma) || !rawMap[ma]) { skipped++; continue; }
+    var ma = String(row[1]).trim();
+    if (SKIP_EXACT.has(ma) || !rawMap[ma]) continue;
 
-    const toNum = v => {
+    function toNum(v) {
       if (v === null || v === undefined || v === '') return null;
-      const n = parseFloat(v);
-      return isFinite(n) && Math.abs(n) < 1e10 ? n : null;
-    };
-
-    const q1    = toNum(row[2]);   // NPAT Q1/2026
-    const q1yoy = toNum(row[4]);   // YoY%
-    const pplan = toNum(row[6]);   // % Plan
-    const kh    = toNum(row[7]);   // KH 2026
-    const ln25  = toNum(row[8]);   // LN 2025
-
-    const cur = rawMap[ma];
-    const diff = [];
-
-    if (kh && kh > 0 && (!cur.kh2026 || Math.abs(kh - cur.kh2026) / cur.kh2026 > 0.02)) {
-      const pct = ln25 ? ((kh - ln25)/ln25*100).toFixed(1) : '?';
-      diff.push(`KH=${kh.toFixed(0)} (${pct>0?'+':''}${pct}%)`);
+      var n = parseFloat(v);
+      return (isFinite(n) && Math.abs(n) < 1e10) ? n : null;
     }
-    if (q1 && q1 > 0 && (!cur.q1_2026 || Math.abs(q1 - cur.q1_2026) / cur.q1_2026 > 0.02)) {
-      const yoyStr = q1yoy != null ? ` YoY ${q1yoy>=0?'+':''}${(q1yoy*100).toFixed(1)}%` : '';
-      diff.push(`Q1=${q1.toFixed(0)}${yoyStr}`);
+
+    var q1    = toNum(row[2]);
+    var q1yoy = toNum(row[4]);
+    var kh    = toNum(row[7]);
+    var ln25  = toNum(row[8]);
+
+    var cur = rawMap[ma];
+    var diff = [];
+
+    if (kh && kh > 0) {
+      if (!cur.kh2026 || Math.abs(kh - cur.kh2026) / cur.kh2026 > 0.02) {
+        var pct = ln25 ? ((kh - ln25)/ln25*100).toFixed(1) : '?';
+        diff.push('KH=' + kh.toFixed(0) + ' (' + (pct>0?'+':'') + pct + '%)');
+      }
+    }
+    if (q1 && q1 > 0) {
+      if (!cur.q1_2026 || Math.abs(q1 - cur.q1_2026) / cur.q1_2026 > 0.02) {
+        var yoyStr = (q1yoy != null) ? ' YoY ' + (q1yoy>=0?'+':'') + (q1yoy*100).toFixed(1) + '%' : '';
+        diff.push('Q1=' + q1.toFixed(0) + yoyStr);
+      }
     }
 
     if (diff.length > 0) {
-      changes.push({ma, kh, q1, q1yoy, ln25, pplan});
-      lines.push(`<span class="ok">✓ ${ma.padEnd(6)}</span>  ${diff.join('  |  ')}`);
+      changes.push({ma:ma, kh:kh, q1:q1, q1yoy:q1yoy, ln25:ln25});
+      var pad = ma.length < 6 ? ma + new Array(7-ma.length).join(' ') : ma;
+      lines.push('<span class="ok">+ ' + pad + '</span>  ' + diff.join('  |  '));
       updated++;
     }
   }
 
   if (updated === 0) {
-    lines.push('
-<span class="warn">Không có dữ liệu mới so với hiện tại.</span>');
+    lines.push('<span class="warn">Khong co du lieu moi so voi hien tai.</span>');
   } else {
-    lines.push(`
-<span class="ok">→ ${updated} mã có thay đổi</span>`);
+    lines.push('<span class="ok">→ ' + updated + ' ma co thay doi</span>');
   }
 
-  log.innerHTML = lines.join('
-');
+  log.innerHTML = lines.join('\n');
   pendingImport = changes;
-  document.getElementById('btn-apply').style.display = changes.length > 0 ? '' : 'none';
+  document.getElementById('btn-apply').style.display = (changes.length > 0) ? '' : 'none';
 }
 
 function applyImport() {
   if (!pendingImport || pendingImport.length === 0) return;
-  const rawMap = {};
-  RAW_DATA.forEach(r => rawMap[r.ma] = r);
+  var rawMap = {};
+  RAW_BASE.forEach(function(r){ rawMap[r.ma] = r; });
 
-  pendingImport.forEach(({ma, kh, q1, q1yoy, ln25, pplan}) => {
-    const row = rawMap[ma];
+  pendingImport.forEach(function(item) {
+    var row = rawMap[item.ma];
     if (!row) return;
-    if (kh && kh > 0 && (!row.kh2026 || Math.abs(kh - row.kh2026) / row.kh2026 > 0.02)) {
-      row.kh2026 = kh;
-      if (!row.type) row.type = 'est';
+    if (item.kh && item.kh > 0) {
+      if (!row.kh2026 || Math.abs(item.kh - row.kh2026) / row.kh2026 > 0.02) {
+        row.kh2026 = item.kh;
+        if (!row.type) row.type = 'est';
+      }
     }
-    if (q1 && q1 > 0 && (!row.q1_2026 || Math.abs(q1 - row.q1_2026) / row.q1_2026 > 0.02)) {
-      row.q1_2026 = q1;
-      row.q4_yoy  = q1yoy;
+    if (item.q1 && item.q1 > 0) {
+      if (!row.q1_2026 || Math.abs(item.q1 - row.q1_2026) / row.q1_2026 > 0.02) {
+        row.q1_2026 = item.q1;
+        row.q4_yoy  = item.q1yoy;
+      }
     }
-    if (ln25 && ln25 > 0) row.ln2025 = ln25;
+    if (item.ln25 && item.ln25 > 0) row.ln2025 = item.ln25;
   });
 
   pendingImport = null;
-  renderTable();
-  updateStats();
+  render();
   closeImport();
 
-  // Flash notification
-  const n = document.createElement('div');
-  n.style.cssText = 'position:fixed;bottom:24px;right:24px;background:var(--green);color:#fff;padding:10px 18px;border-radius:8px;font-size:13px;font-weight:600;z-index:9999;box-shadow:0 4px 16px rgba(0,0,0,.25)';
-  n.textContent = '✓ Import thành công!';
+  var n = document.createElement('div');
+  n.style.cssText = 'position:fixed;bottom:24px;right:24px;background:var(--green);color:#fff;' +
+    'padding:10px 18px;border-radius:8px;font-size:13px;font-weight:600;z-index:9999;' +
+    'box-shadow:0 4px 16px rgba(0,0,0,.25)';
+  n.textContent = 'Import thanh cong!';
   document.body.appendChild(n);
-  setTimeout(() => n.remove(), 2500);
+  setTimeout(function(){ n.remove(); }, 2500);
 }
 
 function closeImport() {
@@ -743,11 +752,9 @@ function closeImport() {
   pendingImport = null;
 }
 
-// Đóng modal khi click nền
 document.getElementById('import-modal').addEventListener('click', function(e) {
   if (e.target === this) closeImport();
 });
-
 </script>
 </body>
 </html>
